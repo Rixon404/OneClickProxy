@@ -1,0 +1,656 @@
+#!/usr/bin/env python3
+import customtkinter as ctk
+import subprocess
+import os
+import json
+from pathlib import Path
+import threading
+import tempfile
+
+class ProxyManagerApp:
+    def __init__(self):
+        # Configuración de customtkinter
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")  # Usamos el tema azul base y personalizamos colores
+        
+        self.root = ctk.CTk()
+        self.root.title("Proxy Manager - Ubuntu")
+        self.root.geometry("500x480")
+        self.root.resizable(False, False)
+        
+        # Variables de estado
+        self.proxy_active = False
+        
+        # Cargar credenciales y configuración
+        self.credentials = self.load_credentials()
+        self.config_file = Path.home() / ".proxy_manager_config.json"
+        self.proxy_settings = self.load_config()
+        
+        self.create_widgets()
+        self.check_proxy_status()
+        
+    def load_credentials(self):
+        """Cargar credenciales guardadas"""
+        credentials_file = Path.home() / ".proxy_manager_credentials.json"
+        default_creds = {"username": "", "password": ""}
+        
+        if credentials_file.exists():
+            try:
+                with open(credentials_file, 'r') as f:
+                    return json.load(f)
+            except:
+                return default_creds
+        else:
+            with open(credentials_file, 'w') as f:
+                json.dump(default_creds, f, indent=2)
+            return default_creds
+    
+    def save_credentials(self):
+        """Guardar credenciales"""
+        credentials_file = Path.home() / ".proxy_manager_credentials.json"
+        with open(credentials_file, 'w') as f:
+            json.dump(self.credentials, f, indent=2)
+    
+    def load_config(self):
+        """Cargar configuración de proxy guardada o usar valores por defecto"""
+        default_config = {
+            "http_proxy": "http://usuario:contraseña@192.168.91.20:3128",
+            "https_proxy": "http://usuario:contraseña@192.168.91.20:3128",
+            "ftp_proxy": "http://usuario:contraseña@192.168.91.20:3128",
+            "no_proxy": "localhost,127.0.0.1,localaddress,.localdomain.com,repositorio.etecsa.cu,*.cu",
+            "apt_proxy": "http://usuario:contraseña@192.168.91.20:3128"
+        }
+        
+        if self.config_file.exists():
+            try:
+                with open(self.config_file, 'r') as f:
+                    return json.load(f)
+            except:
+                return default_config
+        else:
+            self.save_config(default_config)
+            return default_config
+    
+    def save_config(self, config):
+        """Guardar configuración de proxy"""
+        with open(self.config_file, 'w') as f:
+            json.dump(config, f, indent=2)
+    
+    def create_widgets(self):
+        """Crear la interfaz de usuario"""
+        main_frame = ctk.CTkFrame(self.root)
+        main_frame.pack(padx=20, pady=20, fill="both", expand=True)
+        
+        # Título
+        title_label = ctk.CTkLabel(
+            main_frame, 
+            text="GESTOR DE PROXY", 
+            font=("Arial", 24, "bold"),
+            text_color="#3498db"
+        )
+        title_label.pack(pady=(10, 5))
+        
+        # Subtítulo
+        subtitle_label = ctk.CTkLabel(
+            main_frame, 
+            text="Un clic para activar/desactivar todo",
+            font=("Arial", 14)
+        )
+        subtitle_label.pack(pady=(0, 15))
+        
+        # Frame para credenciales
+        credentials_frame = ctk.CTkFrame(main_frame)
+        credentials_frame.pack(padx=20, pady=10, fill="x")
+        
+        # Etiqueta y campo de usuario
+        user_frame = ctk.CTkFrame(credentials_frame)
+        user_frame.pack(fill="x", pady=5, padx=10)
+        
+        ctk.CTkLabel(user_frame, text="Usuario:", font=("Arial", 12)).pack(side="left", padx=(10, 5))
+        self.user_entry = ctk.CTkEntry(user_frame, width=200)
+        self.user_entry.insert(0, self.credentials["username"])
+        self.user_entry.pack(side="left", padx=5)
+        
+        # Etiqueta y campo de contraseña
+        pass_frame = ctk.CTkFrame(credentials_frame)
+        pass_frame.pack(fill="x", pady=5, padx=10)
+        
+        ctk.CTkLabel(pass_frame, text="Contraseña:", font=("Arial", 12)).pack(side="left", padx=(10, 5))
+        self.pass_entry = ctk.CTkEntry(pass_frame, show="*", width=200)
+        self.pass_entry.insert(0, self.credentials["password"])  # Insertamos la contraseña guardada
+        self.pass_entry.pack(side="left", padx=5)
+        
+        # Botón para mostrar/ocultar contraseña
+        self.show_pass_var = ctk.BooleanVar()
+        self.show_pass_btn = ctk.CTkCheckBox(pass_frame, text="Mostrar", variable=self.show_pass_var, 
+                                            command=self.toggle_password_visibility)
+        self.show_pass_btn.pack(side="right", padx=(5, 10))
+        
+        # Botón para guardar credenciales
+        save_creds_btn = ctk.CTkButton(credentials_frame, text="💾 Guardar Credenciales", 
+                                      command=self.save_current_credentials,
+                                      fg_color="#95a5a6", hover_color="#7f8c8d", height=25)
+        save_creds_btn.pack(pady=10)
+        
+        # Frame de botones
+        button_frame = ctk.CTkFrame(main_frame)
+        button_frame.pack(padx=20, pady=10, fill="x")
+        
+        # Botón para DESACTIVAR proxy - Color menos saturado (más oscuro)
+        self.disable_btn = ctk.CTkButton(
+            button_frame,
+            text="❌ DESACTIVAR PROXY",
+            font=("Arial", 16, "bold"),
+            fg_color="#8B0000",  # Rojo oscuro
+            hover_color="#A0522D",  # Marrón rojizo más claro
+            height=60,
+            command=self.start_disable_proxy
+        )
+        self.disable_btn.pack(padx=20, pady=10, fill="x")
+        
+        # Botón para ACTIVAR proxy - Color menos saturado (más oscuro)
+        self.enable_btn = ctk.CTkButton(
+            button_frame,
+            text="✅ ACTIVAR PROXY",
+            font=("Arial", 16, "bold"),
+            fg_color="#006400",  # Verde oscuro
+            hover_color="#228B22",  # Verde bosque
+            height=60,
+            command=self.start_enable_proxy
+        )
+        self.enable_btn.pack(padx=20, pady=10, fill="x")
+        
+        # Estado actual
+        self.status_label = ctk.CTkLabel(
+            main_frame,
+            text="Estado: 🔍 Verificando...",
+            font=("Arial", 14, "bold"),
+            text_color="#3498db"
+        )
+        self.status_label.pack(pady=10)
+        
+        # Botón de configuración
+        config_btn = ctk.CTkButton(
+            main_frame,
+            text="⚙️ Configurar Proxy",
+            font=("Arial", 12),
+            fg_color="#95a5a6",
+            hover_color="#7f8c8d",
+            height=30,
+            command=self.open_config_window
+        )
+        config_btn.pack(pady=10)
+        
+        # Indicador de permisos
+        self.sudo_label = ctk.CTkLabel(
+            main_frame,
+            text="🔒 Se necesitarán permisos de administrador",
+            font=("Arial", 10),
+            text_color="#f39c12"
+        )
+        self.sudo_label.pack(pady=(5, 15))
+    
+    def toggle_password_visibility(self):
+        """Mostrar u ocultar la contraseña"""
+        if self.show_pass_var.get():
+            self.pass_entry.configure(show="")
+        else:
+            self.pass_entry.configure(show="*")
+    
+    def save_current_credentials(self):
+        """Guardar las credenciales actuales"""
+        self.credentials["username"] = self.user_entry.get()
+        self.credentials["password"] = self.pass_entry.get()
+        self.save_credentials()
+        self.show_success("✅ Credenciales guardadas correctamente")
+    
+    def check_proxy_status(self):
+        """Verificar el estado actual del proxy"""
+        try:
+            # Verificar proxy del sistema
+            result = subprocess.run(['gsettings', 'get', 'org.gnome.system.proxy', 'mode'], 
+                                  capture_output=True, text=True)
+            mode = result.stdout.strip().strip("'")
+            
+            self.proxy_active = (mode == 'manual')
+            self.update_status_display()
+            
+        except Exception as e:
+            self.status_label.configure(text=f"Error al verificar: {str(e)}", text_color="#e74c3c")
+    
+    def update_status_display(self):
+        """Actualizar el estado mostrado en la interfaz"""
+        if self.proxy_active:
+            self.status_label.configure(
+                text="Estado: ✅ PROXY ACTIVO", 
+                text_color="#2ecc71"
+            )
+            self.disable_btn.configure(state="normal")
+            self.enable_btn.configure(state="disabled")
+        else:
+            self.status_label.configure(
+                text="Estado: ❌ PROXY DESACTIVADO", 
+                text_color="#e74c3c"
+            )
+            self.disable_btn.configure(state="disabled")
+            self.enable_btn.configure(state="normal")
+    
+    def ask_sudo_password(self):
+        """Solicitar contraseña de administrador de forma segura"""
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title("Contraseña de administrador")
+        dialog.geometry("350x180")
+        dialog.grab_set()
+        dialog.focus_force()
+        
+        # Centrar el diálogo
+        dialog.transient(self.root)
+        dialog.geometry(f"+{self.root.winfo_x() + 50}+{self.root.winfo_y() + 50}")
+        
+        frame = ctk.CTkFrame(dialog)
+        frame.pack(padx=20, pady=20, fill="both", expand=True)
+        
+        ctk.CTkLabel(frame, text="Introduce tu contraseña de administrador:", 
+                    font=("Arial", 12)).pack(pady=10)
+        
+        password_entry = ctk.CTkEntry(frame, show="*", width=300)
+        password_entry.pack(pady=10)
+        password_entry.focus()
+        
+        result = [None]
+        
+        def confirm():
+            result[0] = password_entry.get()
+            dialog.destroy()
+        
+        def cancel():
+            result[0] = None
+            dialog.destroy()
+        
+        btn_frame = ctk.CTkFrame(frame)
+        btn_frame.pack(pady=10)
+        
+        ctk.CTkButton(btn_frame, text="Aceptar", command=confirm, 
+                     fg_color="#2ecc71", width=100).pack(side="left", padx=5)
+        ctk.CTkButton(btn_frame, text="Cancelar", command=cancel, 
+                     fg_color="#e74c3c", width=100).pack(side="left", padx=5)
+        
+        # Permitir presionar Enter para confirmar
+        password_entry.bind('<Return>', lambda e: confirm())
+        
+        self.root.wait_window(dialog)
+        return result[0]
+    
+    def run_command_with_sudo(self, command, password):
+        """Ejecutar comando con sudo usando la contraseña"""
+        cmd = f"echo '{password}' | sudo -S {command}"
+        try:
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            return result.returncode == 0, result.stdout, result.stderr
+        except Exception as e:
+            return False, "", str(e)
+    
+    def start_disable_proxy(self):
+        """Iniciar el proceso de desactivación de proxy en un hilo separado"""
+        self.disable_btn.configure(state="disabled")
+        self.enable_btn.configure(state="disabled")
+        threading.Thread(target=self._disable_proxy_thread, daemon=True).start()
+    
+    def start_enable_proxy(self):
+        """Iniciar el proceso de activación de proxy en un hilo separado"""
+        self.disable_btn.configure(state="disabled")
+        self.enable_btn.configure(state="disabled")
+        threading.Thread(target=self._enable_proxy_thread, daemon=True).start()
+    
+    def _disable_proxy_thread(self):
+        """Hilo para desactivar proxy"""
+        try:
+            # Actualizar estado en la interfaz principal
+            self.root.after(0, lambda: self.status_label.configure(
+                text="Estado: ⏳ Desactivando proxy...", text_color="#f39c12"))
+            
+            # Solicitar contraseña sudo
+            password = self.ask_sudo_password()
+            
+            if not password:
+                self.root.after(0, lambda: self.show_error("❌ Cancelado por el usuario"))
+                self.root.after(0, lambda: self.update_status_display())
+                return
+            
+            success = self._perform_disable_proxy(password)
+            
+            if success:
+                self.proxy_active = False
+                self.root.after(0, lambda: self.update_status_display())
+                self.root.after(0, lambda: self.show_success("✅ ¡Proxy desactivado correctamente!"))
+            else:
+                self.root.after(0, lambda: self.show_error("❌ Error al desactivar proxy"))
+                self.root.after(0, lambda: self.update_status_display())
+                
+        except Exception as e:
+            error_msg = f"❌ Error general: {str(e)}"
+            self.root.after(0, lambda: self.show_error(error_msg))
+            self.root.after(0, lambda: self.update_status_display())
+    
+    def _enable_proxy_thread(self):
+        """Hilo para activar proxy"""
+        try:
+            # Actualizar estado en la interfaz principal
+            self.root.after(0, lambda: self.status_label.configure(
+                text="Estado: ⏳ Activando proxy...", text_color="#f39c12"))
+            
+            # Solicitar contraseña sudo
+            password = self.ask_sudo_password()
+            
+            if not password:
+                self.root.after(0, lambda: self.show_error("❌ Cancelado por el usuario"))
+                self.root.after(0, lambda: self.update_status_display())
+                return
+            
+            # Actualizar las credenciales en la configuración de proxy
+            self.update_proxy_settings_with_credentials()
+            
+            success = self._perform_enable_proxy(password)
+            
+            if success:
+                self.proxy_active = True
+                self.root.after(0, lambda: self.update_status_display())
+                self.root.after(0, lambda: self.show_success("✅ ¡Proxy activado correctamente!"))
+            else:
+                self.root.after(0, lambda: self.show_error("❌ Error al activar proxy"))
+                self.root.after(0, lambda: self.update_status_display())
+                
+        except Exception as e:
+            error_msg = f"❌ Error general: {str(e)}"
+            self.root.after(0, lambda: self.show_error(error_msg))
+            self.root.after(0, lambda: self.update_status_display())
+    
+    def update_proxy_settings_with_credentials(self):
+        """Actualizar la configuración de proxy con las credenciales actuales"""
+        username = self.user_entry.get()
+        password = self.pass_entry.get()
+        
+        if username and password:
+            # Actualizar la configuración con las nuevas credenciales
+            for key in ['http_proxy', 'https_proxy', 'ftp_proxy', 'apt_proxy']:
+                old_url = self.proxy_settings[key]
+                if '@' in old_url:
+                    # Extraer la parte del host:puerto
+                    host_port = old_url.split('@')[-1]
+                    self.proxy_settings[key] = f"http://{username}:{password}@{host_port}"
+                else:
+                    # Si no hay credenciales en la URL original, solo agregarlas
+                    self.proxy_settings[key] = f"http://{username}:{password}@{old_url.split('://')[-1]}"
+            
+            self.save_config(self.proxy_settings)
+    
+    def _perform_disable_proxy(self, password):
+        """Realizar la desactivación de proxy"""
+        try:
+            # 1. Desactivar proxy del sistema (GNOME)
+            subprocess.run([
+                'gsettings', 'set', 'org.gnome.system.proxy', 'mode', 'none'
+            ], check=True)
+            
+            # 2. Limpiar variables de entorno del sistema (solo para esta sesión)
+            env_commands = [
+                'unset http_proxy',
+                'unset https_proxy', 
+                'unset ftp_proxy',
+                'unset no_proxy',
+                'unset HTTP_PROXY',
+                'unset HTTPS_PROXY',
+                'unset FTP_PROXY',
+                'unset NO_PROXY'
+            ]
+            
+            for cmd in env_commands:
+                subprocess.run(cmd, shell=True, executable='/bin/bash')
+            
+            # 3. Limpiar proxy de apt
+            apt_proxy_file = "/etc/apt/apt.conf.d/99proxy"
+            if Path(apt_proxy_file).exists():
+                success, _, _ = self.run_command_with_sudo(f"rm -f {apt_proxy_file}", password)
+                if not success:
+                    print(f"Advertencia: No se pudo eliminar {apt_proxy_file}")
+            
+            # 4. Limpiar /etc/environment
+            success, _, _ = self.run_command_with_sudo(
+                "sed -i '/proxy/d;/PROXY/d' /etc/environment", 
+                password
+            )
+            if not success:
+                print("Advertencia: No se pudo limpiar /etc/environment")
+            
+            return True
+            
+        except subprocess.CalledProcessError as e:
+            print(f"Error en subprocess: {e}")
+            return False
+        except Exception as e:
+            print(f"Error general: {e}")
+            return False
+    
+    def _perform_enable_proxy(self, password):
+        """Realizar la activación de proxy"""
+        try:
+            # 1. Configurar proxy del sistema (GNOME)
+            proxy_url = self.proxy_settings["http_proxy"]
+            proxy_host = proxy_url.split('@')[-1].split(':')[0]
+            proxy_port = proxy_url.split(':')[-1].split('/')[0]
+            
+            # Configurar modo manual
+            subprocess.run([
+                'gsettings', 'set', 'org.gnome.system.proxy', 'mode', 'manual'
+            ], check=True)
+            
+            # Configurar proxy HTTP
+            subprocess.run([
+                'gsettings', 'set', 'org.gnome.system.proxy.http', 'host', proxy_host
+            ], check=True)
+            
+            subprocess.run([
+                'gsettings', 'set', 'org.gnome.system.proxy.http', 'port', proxy_port
+            ], check=True)
+            
+            # Habilitar proxy HTTP
+            subprocess.run([
+                'gsettings', 'set', 'org.gnome.system.proxy.http', 'enabled', 'true'
+            ], check=True)
+            
+            # Configurar no_proxy
+            no_proxy_list = self.proxy_settings["no_proxy"].split(',')
+            subprocess.run([
+                'gsettings', 'set', 'org.gnome.system.proxy', 'ignore-hosts', 
+                str(no_proxy_list).replace("'", '"')
+            ], check=True)
+            
+            # 2. Establecer variables de entorno en /etc/environment
+            env_content = f"""
+# Proxy Settings
+http_proxy="{self.proxy_settings['http_proxy']}"
+https_proxy="{self.proxy_settings['https_proxy']}"
+ftp_proxy="{self.proxy_settings['ftp_proxy']}"
+no_proxy="{self.proxy_settings['no_proxy']}"
+HTTP_PROXY="{self.proxy_settings['http_proxy']}"
+HTTPS_PROXY="{self.proxy_settings['https_proxy']}"
+FTP_PROXY="{self.proxy_settings['ftp_proxy']}"
+NO_PROXY="{self.proxy_settings['no_proxy']}"
+"""
+            
+            # Escribir a un archivo temporal y moverlo con sudo
+            with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_file:
+                temp_file.write(env_content)
+                temp_file_path = temp_file.name
+            
+            success, _, _ = self.run_command_with_sudo(
+                f"cat {temp_file_path} >> /etc/environment && rm {temp_file_path}", 
+                password
+            )
+            if not success:
+                print("Advertencia: No se pudo actualizar /etc/environment")
+            
+            # 3. Configurar proxy para apt
+            apt_config = f"""
+Acquire::http::proxy "{self.proxy_settings['apt_proxy']}/";
+Acquire::https::proxy "{self.proxy_settings['apt_proxy']}/";
+Acquire::ftp::proxy "{self.proxy_settings['apt_proxy']}/";
+"""
+            
+            # Escribir a un archivo temporal y moverlo con sudo
+            with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_file:
+                temp_file.write(apt_config)
+                temp_file_path = temp_file.name
+            
+            success, _, _ = self.run_command_with_sudo(
+                f"mv {temp_file_path} /etc/apt/apt.conf.d/99proxy && chmod 644 /etc/apt/apt.conf.d/99proxy", 
+                password
+            )
+            if not success:
+                print("Advertencia: No se pudo configurar proxy para apt")
+            
+            return True
+            
+        except subprocess.CalledProcessError as e:
+            print(f"Error en subprocess: {e}")
+            return False
+        except Exception as e:
+            print(f"Error general: {e}")
+            return False
+    
+    def open_config_window(self):
+        """Abrir ventana de configuración"""
+        config_window = ctk.CTkToplevel(self.root)
+        config_window.title("Configuración de Proxy")
+        config_window.geometry("550x500")
+        config_window.grab_set()
+        config_window.focus_force()
+        
+        # Centrar el diálogo
+        config_window.transient(self.root)
+        config_window.geometry(f"+{self.root.winfo_x() + 25}+{self.root.winfo_y() + 25}")
+        
+        main_frame = ctk.CTkFrame(config_window)
+        main_frame.pack(padx=20, pady=20, fill="both", expand=True)
+        
+        ctk.CTkLabel(main_frame, text="CONFIGURACIÓN DE PROXY", 
+                    font=("Arial", 18, "bold")).pack(pady=10)
+        
+        # Crear campos de entrada
+        fields = [
+            ("HTTP Proxy:", "http_proxy"),
+            ("HTTPS Proxy:", "https_proxy"),
+            ("FTP Proxy:", "ftp_proxy"),
+            ("No Proxy:", "no_proxy"),
+            ("APT Proxy:", "apt_proxy")
+        ]
+        
+        entries = {}
+        
+        for label_text, key in fields:
+            frame = ctk.CTkFrame(main_frame)
+            frame.pack(fill="x", pady=5)
+            
+            ctk.CTkLabel(frame, text=label_text, width=100).pack(side="left", padx=5)
+            entry = ctk.CTkEntry(frame, width=400)
+            entry.insert(0, self.proxy_settings.get(key, ""))
+            entry.pack(side="left", padx=5)
+            entries[key] = entry
+        
+        def save_config():
+            for key, entry in entries.items():
+                self.proxy_settings[key] = entry.get()
+            self.save_config(self.proxy_settings)
+            self.show_success("✅ Configuración guardada")
+            config_window.destroy()
+        
+        def test_connection():
+            proxy = entries["http_proxy"].get()
+            try:
+                result = subprocess.run([
+                    'curl', '-x', proxy, 'http://www.google.com', '--max-time', '5', '-I'
+                ], capture_output=True, text=True)
+                
+                if result.returncode == 0 and "200 OK" in result.stdout:
+                    self.show_success("✅ Conexión exitosa")
+                else:
+                    self.show_error("❌ Error en la conexión")
+            except Exception as e:
+                self.show_error(f"❌ Error: {str(e)}")
+        
+        btn_frame = ctk.CTkFrame(main_frame)
+        btn_frame.pack(pady=20)
+        
+        ctk.CTkButton(btn_frame, text="💾 Guardar", command=save_config,
+                     fg_color="#2ecc71", width=120).pack(side="left", padx=10)
+        
+        ctk.CTkButton(btn_frame, text="🔍 Probar Conexión", command=test_connection,
+                     fg_color="#3498db", width=120).pack(side="left", padx=10)
+        
+        ctk.CTkButton(btn_frame, text="❌ Cancelar", command=config_window.destroy,
+                     fg_color="#e74c3c", width=120).pack(side="left", padx=10)
+    
+    def show_success(self, message):
+        """Mostrar mensaje de éxito"""
+        try:
+            dialog = ctk.CTkToplevel(self.root)
+            dialog.title("Éxito")
+            dialog.geometry("300x150")
+            dialog.grab_set()
+            dialog.focus_force()
+            
+            # Centrar el diálogo
+            dialog.transient(self.root)
+            dialog.geometry(f"+{self.root.winfo_x() + 75}+{self.root.winfo_y() + 75}")
+            
+            frame = ctk.CTkFrame(dialog)
+            frame.pack(padx=20, pady=20, fill="both", expand=True)
+            
+            ctk.CTkLabel(frame, text=message, font=("Arial", 14, "bold"),
+                        text_color="#2ecc71").pack(pady=20)
+            
+            ctk.CTkButton(frame, text="OK", command=dialog.destroy,
+                         fg_color="#2ecc71", width=100).pack(pady=10)
+        except Exception:
+            pass  # Silenciar errores de interfaz
+    
+    def show_error(self, message):
+        """Mostrar mensaje de error"""
+        try:
+            dialog = ctk.CTkToplevel(self.root)
+            dialog.title("Error")
+            dialog.geometry("400x200")
+            dialog.grab_set()
+            dialog.focus_force()
+            
+            # Centrar el diálogo
+            dialog.transient(self.root)
+            dialog.geometry(f"+{self.root.winfo_x() + 50}+{self.root.winfo_y() + 50}")
+            
+            frame = ctk.CTkFrame(dialog)
+            frame.pack(padx=20, pady=20, fill="both", expand=True)
+            
+            ctk.CTkLabel(frame, text=message, font=("Arial", 12),
+                        text_color="#e74c3c", wraplength=350).pack(pady=20)
+            
+            ctk.CTkButton(frame, text="OK", command=dialog.destroy,
+                         fg_color="#e74c3c", width=100).pack(pady=10)
+        except Exception:
+            pass  # Silenciar errores de interfaz
+    
+    def run(self):
+        """Ejecutar la aplicación"""
+        self.root.mainloop()
+
+if __name__ == "__main__":
+    # Verificar si customtkinter está instalado
+    try:
+        import customtkinter
+    except ImportError:
+        print("Error: customtkinter no está instalado")
+        print("Instala con: pip install customtkinter")
+        print("O con sudo: sudo pip install customtkinter")
+        exit(1)
+    
+    app = ProxyManagerApp()
+    app.run()
