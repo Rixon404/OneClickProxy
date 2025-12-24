@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-import customtkinter as ctk
+try:
+    import customtkinter as ctk
+except ImportError:
+    print("Error: customtkinter no está instalado. Instala con: pip install customtkinter")
+    raise
 import subprocess
 import os
 import json
@@ -16,8 +20,8 @@ class ProxyManagerApp:
         
         self.root = ctk.CTk()
         self.root.title("Proxy Manager - Ubuntu")
-        self.root.geometry("500x620")
-        self.root.resizable(False, False)
+        self.root.geometry("1500x1000")
+        self.root.resizable(True, True)
         
         # Variables de estado
         self.proxy_active = False
@@ -119,7 +123,7 @@ class ProxyManagerApp:
         user_frame.pack(fill="x", pady=5, padx=10)
         
         ctk.CTkLabel(user_frame, text="Usuario:", font=("Arial", 12)).pack(side="left", padx=(10, 5))
-        self.user_entry = ctk.CTkEntry(user_frame, width=200)
+        self.user_entry = ctk.CTkEntry(user_frame, width=400)
         self.user_entry.insert(0, self.credentials["username"])
         self.user_entry.pack(side="left", padx=5)
         
@@ -128,7 +132,7 @@ class ProxyManagerApp:
         pass_frame.pack(fill="x", pady=5, padx=10)
         
         ctk.CTkLabel(pass_frame, text="Contrasena:", font=("Arial", 12)).pack(side="left", padx=(10, 5))
-        self.pass_entry = ctk.CTkEntry(pass_frame, show="*", width=200)
+        self.pass_entry = ctk.CTkEntry(pass_frame, show="*", width=400)
         self.pass_entry.insert(0, self.credentials["password"])
         self.pass_entry.pack(side="left", padx=5)
         
@@ -317,10 +321,13 @@ HTTPS_PROXY="{self.proxy_settings['https_proxy']}"
 FTP_PROXY="{self.proxy_settings['ftp_proxy']}"
 NO_PROXY="{self.proxy_settings['no_proxy']}"
 """
-            
-            # Escribir el nuevo contenido para /etc/environment
+            # Escribir a archivo temporal y mover con sudo (evita problemas con redirecciones)
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.env') as tmp_env_file:
+                tmp_env_file.write(env_content)
+                tmp_env_path = tmp_env_file.name
+
             success_env, stdout_env, stderr_env = self.run_command_with_sudo(
-                f"echo '{env_content}' > /etc/environment", 
+                f"mv {tmp_env_path} /etc/environment && chmod 644 /etc/environment",
                 password
             )
             
@@ -331,10 +338,13 @@ Acquire::http::proxy "{self.proxy_settings['apt_proxy']}/";
 Acquire::https::proxy "{self.proxy_settings['apt_proxy']}/";
 Acquire::ftp::proxy "{self.proxy_settings['apt_proxy']}/";
 """
-            
-            # Escribir el nuevo contenido para apt
+            # Escribir a archivo temporal y mover con sudo
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.apt') as tmp_apt_file:
+                tmp_apt_file.write(apt_config)
+                tmp_apt_path = tmp_apt_file.name
+
             success_apt, stdout_apt, stderr_apt = self.run_command_with_sudo(
-                f"echo '{apt_config}' > /etc/apt/apt.conf.d/99proxy && chmod 644 /etc/apt/apt.conf.d/99proxy", 
+                f"mv {tmp_apt_path} /etc/apt/apt.conf.d/99proxy && chmod 644 /etc/apt/apt.conf.d/99proxy",
                 password
             )
             
@@ -474,7 +484,7 @@ Acquire::ftp::proxy "{self.proxy_settings['apt_proxy']}/";
             
             dialog = ctk.CTkToplevel(self.root)
             dialog.title("Contrasena de administrador")
-            dialog.geometry("350x180")
+            dialog.geometry("500x300")
             
             # Centrar el dialogo
             screen_width = self.root.winfo_screenwidth()
@@ -538,10 +548,19 @@ Acquire::ftp::proxy "{self.proxy_settings['apt_proxy']}/";
         """Ejecutar comando con sudo usando la contrasena"""
         if not password:
             return False, "", "Contrasena vacia"
-        
-        cmd = f"echo '{password}' | sudo -S {command}"
         try:
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+            # Ejecutar usando sudo -S y pasar la contraseña por stdin en lugar de usar echo en la línea de comandos.
+            # Esto evita que la redirección '>' falle por permisos y reduce exposición de la contraseña en el history.
+            full_cmd = f"sudo -S {command}"
+            result = subprocess.run(
+                full_cmd,
+                shell=True,
+                input=password + "\n",
+                capture_output=True,
+                text=True,
+                timeout=30,
+                executable='/bin/bash'
+            )
             return result.returncode == 0, result.stdout, result.stderr
         except Exception as e:
             return False, "", str(e)
@@ -834,8 +853,9 @@ Acquire::ftp::proxy "{self.proxy_settings['apt_proxy']}/";
             
             # 4. Limpiar /etc/environment
             print("4. Limpiando /etc/environment...")
+            # NO incluir 'sudo' aquí: run_command_with_sudo ya ejecuta con sudo -S
             success, stdout, stderr = self.run_command_with_sudo(
-                "sudo sed -i '/proxy/d;/PROXY/d' /etc/environment", 
+                "sed -i '/proxy/d;/PROXY/d' /etc/environment",
                 password
             )
             if success:
@@ -943,15 +963,15 @@ HTTPS_PROXY="{self.proxy_settings['https_proxy']}"
 FTP_PROXY="{self.proxy_settings['ftp_proxy']}"
 NO_PROXY="{self.proxy_settings['no_proxy']}"
 """
-            
             with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.env') as temp_file:
                 temp_file.write(env_content)
                 temp_file_path = temp_file.name
             
             print(f"Archivo temporal creado: {temp_file_path}")
             
+            # Mover el archivo temporal para evitar problemas con redirecciones y duplicados
             success, stdout, stderr = self.run_command_with_sudo(
-                f"cat {temp_file_path} >> /etc/environment && rm {temp_file_path}", 
+                f"mv {temp_file_path} /etc/environment && chmod 644 /etc/environment",
                 password
             )
             
@@ -974,7 +994,7 @@ Acquire::ftp::proxy "{self.proxy_settings['apt_proxy']}/";
                 temp_file_path = temp_file.name
             
             success, stdout, stderr = self.run_command_with_sudo(
-                f"mv {temp_file_path} /etc/apt/apt.conf.d/99proxy && chmod 644 /etc/apt/apt.conf.d/99proxy", 
+                f"mv {temp_file_path} /etc/apt/apt.conf.d/99proxy && chmod 644 /etc/apt/apt.conf.d/99proxy",
                 password
             )
             
@@ -1003,7 +1023,7 @@ Acquire::ftp::proxy "{self.proxy_settings['apt_proxy']}/";
         try:
             config_window = ctk.CTkToplevel(self.root)
             config_window.title("Configuracion de Proxy")
-            config_window.geometry("550x500")
+            config_window.geometry("600x550")
             
             # Centrar el dialogo
             screen_width = self.root.winfo_screenwidth()
@@ -1098,7 +1118,7 @@ Acquire::ftp::proxy "{self.proxy_settings['apt_proxy']}/";
         try:
             dialog = ctk.CTkToplevel(self.root)
             dialog.title("Exito")
-            dialog.geometry("300x150")
+            dialog.geometry("500x300")
             
             # Centrar el dialogo
             screen_width = self.root.winfo_screenwidth()
@@ -1131,7 +1151,7 @@ Acquire::ftp::proxy "{self.proxy_settings['apt_proxy']}/";
         try:
             dialog = ctk.CTkToplevel(self.root)
             dialog.title("Error")
-            dialog.geometry("400x200")
+            dialog.geometry("600x350")
             
             # Centrar el dialogo
             screen_width = self.root.winfo_screenwidth()
@@ -1176,16 +1196,6 @@ Acquire::ftp::proxy "{self.proxy_settings['apt_proxy']}/";
             traceback.print_exc()
 
 if __name__ == "__main__":
-    # Verificar si customtkinter esta instalado
-    try:
-        import customtkinter
-    except ImportError as e:
-        print("❌ Error: customtkinter no esta instalado")
-        print("Instala con: pip install customtkinter")
-        print("O con sudo: sudo pip install customtkinter")
-        print(f"Detalles del error: {e}")
-        exit(1)
-    
     print("✅ CustomTkinter importado correctamente")
     app = ProxyManagerApp()
     app.run()
